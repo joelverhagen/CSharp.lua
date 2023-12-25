@@ -20,6 +20,8 @@ using System.Diagnostics.Contracts;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using Ignore;
+using Microsoft.CodeAnalysis;
 
 namespace CSharpLua {
   public sealed class Compiler {
@@ -153,13 +155,74 @@ namespace CSharpLua {
     }
 
     private IEnumerable<string> GetSourceFiles(out bool isDirectory) {
-      if (Directory.Exists(input_)) {
-        isDirectory = true;
-        return Directory.EnumerateFiles(input_, "*.cs", SearchOption.AllDirectories);
+      var pieces = Utility.Split(input_);
+      isDirectory = false;
+
+      var output = Enumerable.Empty<string>();
+      foreach (var piece in pieces) {
+        if (Directory.Exists(piece)) {
+          var dir = Path.GetFullPath(piece);
+          var files = Directory
+            .EnumerateFiles(dir, "*.cs", SearchOption.AllDirectories);
+
+          (var ignore, var gitDir) = GetIgnore(dir);
+          if (ignore is not null) {
+            files = files
+              .Select(x => GetGitPath(gitDir, x))
+              .Where(x => !ignore.IsIgnored(x))
+              .Select(x => Path.GetFullPath(Path.Combine(gitDir, x)))
+              .ToList();
+          }
+
+          output = output.Concat(files);
+        } else {
+          output = output.Append(piece);
+        }
       }
 
-      isDirectory = false;
-      return Utility.Split(input_);
+      return output.Distinct();
+    }
+
+    private string GetGitPath(string gitDir, string path) {
+      path = Path.GetRelativePath(gitDir, path);
+      if (Path.DirectorySeparatorChar == '\\') {
+        path = path.Replace('\\', '/');
+      }
+      return path;
+    }
+
+    private (Ignore.Ignore ignore, string gitDir) GetIgnore(string dir) {
+      var ignoreFiles = new List<string>();
+      string gitDir = null;
+      while (dir is not null) {
+        var ignoreFile = Directory.EnumerateFiles(dir, ".gitignore").FirstOrDefault();
+        if (ignoreFile is not null) {
+          ignoreFiles.Add(ignoreFile);
+        }
+
+        if (Directory.EnumerateDirectories(dir, ".git").Any()) {
+          gitDir = dir;
+          break;
+        }
+
+        dir = Path.GetDirectoryName(dir);
+      }
+
+      if (gitDir is null || ignoreFiles.Count == 0) {
+        return default;
+      }
+
+      var ignore = new Ignore.Ignore();
+      for (var i = ignoreFiles.Count - 1; i >= 0; i--) {
+        foreach (var line in File.ReadLines(ignoreFiles[i])) {
+          if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#")) {
+            continue;
+          }
+          ignore.Add(line);
+        }
+      }
+
+      return (ignore, gitDir);
     }
 
     private LuaSyntaxGenerator GetGenerator() {
