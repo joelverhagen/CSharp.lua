@@ -1273,7 +1273,6 @@ function Enumerable.Max(source, ...)
 end
 
 local function minByOrMaxBy(compareFn, source, keySelector, comparer, TSource, TKey)
-  print("x")
   if source == nil then throw(ArgumentNullException("source")) end
   if keySelector == nil then throw(ArgumentNullException("keySelector")) end
   if comparer == nil then
