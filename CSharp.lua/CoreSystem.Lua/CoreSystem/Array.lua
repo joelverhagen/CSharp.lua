@@ -71,14 +71,14 @@ local function throwFailedVersion()
 end
 
 local function checkIndex(t, index)
-  if index < 0 or index >= #t then
+  if index < 0 or index >= t._length then
     throw(ArgumentOutOfRangeException("index"))
   end
 end
 
 local function checkIndexAndCount(t, index, count)
   if t == nil then throw(ArgumentNullException("array")) end
-  if index < 0 or count < 0 or index + count > #t then
+  if index < 0 or count < 0 or index + count > t._length then
     throw(ArgumentOutOfRangeException("index or count"))
   end
 end
@@ -104,7 +104,7 @@ local function ipairs(t)
       throwFailedVersion()
     end
     local v = t[i]
-    if v ~= nil then
+    if i <= t._length then
       if v == null then
         v = nil
       end
@@ -140,7 +140,7 @@ end
 
 function System.toLuaTable(array)
   local t = {}
-  for i = 1, #array do
+  for i = 1, array._length do
     local item = array[i]
     if item ~= null then
       t[i] = item
@@ -184,32 +184,36 @@ local function set(t, index, v)
 end
 
 local function add(t, v)
-  local n = #t
-  t[n + 1] = v == nil and null or v
+  local n = t._length + 1
+  t[n] = v == nil and null or v
+  t._length = n
   versions[t] = (versions[t] or 0) + 1
   return n
 end
 
 local function addRange(t, collection)
   if collection == nil then throw(ArgumentNullException("collection")) end
-  local count = #t + 1
+  local count = t._length + 1
   if collection.GetEnumerator == arrayEnumerator then
-    tmove(collection, 1, #collection, count, t)
+    tmove(collection, 1, collection._length, count, t)
+    count = count + collection._length
   else
     for _, v in each(collection) do
       t[count] = v == nil and null or v
       count = count + 1
     end
   end
+  t._length = count - 1
   versions[t] = (versions[t] or 0) + 1
 end
 
 local function clear(t)
-  local size = #t
+  local size = t._length
   if size > 0 then
     for i = 1, size do
       t[i] = nil
     end
+    t._length = 0
     versions[t] = (versions[t] or 0) + 1
   end
 end
@@ -224,7 +228,7 @@ local function first(t)
 end
 
 local function last(t)
-  local n = #t
+  local n = t._length
   if n == 0 then throw(InvalidOperationException()) end
   local v = t[n]
   if v ~= null then
@@ -245,6 +249,7 @@ local function fill(t, f, e, v)
 end
 
 local function buildArray(ArrayT, n, t)
+  print("buildArray")
   if type(n) == "table" then
     t = n
   elseif t ~= nil then
@@ -254,7 +259,7 @@ local function buildArray(ArrayT, n, t)
       end
     end
   else
-    t = {}
+    t = { _length = n }
     if n > 0 then
       local T = ArrayT.__genericT__
       local default = T:default()
@@ -274,7 +279,7 @@ end
 
 local function indexOf(t, v, startIndex, count)
   if t == nil then throw(ArgumentNullException("array")) end
-  local len = #t
+  local len = t._length
   if not startIndex then
     startIndex, count = 0, len
   elseif not count then
@@ -304,7 +309,7 @@ end
 
 local function findIndex(t, startIndex, count, match)
   if t == nil then throw(ArgumentNullException("array")) end
-  local len = #t
+  local len = t._length
   if not count then
     startIndex, count, match = 0, len, startIndex
   elseif not match then
@@ -341,7 +346,7 @@ local function copy(sourceArray, sourceIndex, destinationArray, destinationIndex
 end
 
 local function removeRange(t, index, count)
-  local n = #t
+  local n = t._length
   if count < 0 or index > n - count then
     throw(ArgumentOutOfRangeException("index or count"))
   end
@@ -350,6 +355,7 @@ local function removeRange(t, index, count)
       tmove(t, index + count + 1, n, index + 1)
     end
     fill(t, n - count + 1, n, nil)
+    t._length = n - count
     versions[t] = (versions[t] or 0) + 1
   end
 end
@@ -359,7 +365,7 @@ local function findAll(t, match)
   if match == nil then throw(ArgumentNullException("match")) end
   local list = {}
   local count = 1
-  for i = 1, #t do
+  for i = 1, t._length do
     local item = t[i]
     if (item == null and match(nil)) or match(item) then
       list[count] = item
@@ -371,7 +377,7 @@ end
 
 local function binarySearch(t, ...)
   if t == nil then throw(ArgumentNullException("array")) end
-  local len = #t
+  local len = t._length
   local index, count, v, comparer
   local n = select("#", ...)
   if n == 1 or n == 2 then
@@ -424,7 +430,7 @@ local function getSortComp(t, comparer)
     local Compare = comparer.Compare
     compare = function (x, y) return Compare(comparer, x, y) end
   end
-  return function(x, y) 
+  return function(x, y)
     if x == null then x = nil end
     if y == null then y = nil end
     return compare(x, y) < 0
@@ -432,7 +438,7 @@ local function getSortComp(t, comparer)
 end
 
 local function sort(t, comparer)
-  if #t > 1 then
+  if t._length > 1 then
     tsort(t, getSortComp(t, comparer))
     versions[t] = (versions[t] or 0) + 1
   end
@@ -442,14 +448,15 @@ local function addOrder(t, v, comparer)
   local i = binarySearch(t, v, comparer)
   if i >= 0 then return false end
   tinsert(t, bnot(i) + 1, v == nil and null or v)
+  t._length = t._length + 1
   return true
 end
 
 local function addOrderRange(t, collection)
   if collection == nil then throw(ArgumentNullException("collection")) end
-  local comparer, n = t.comparer, #t
+  local comparer, n = t.comparer, t._length
   if collection.GetEnumerator == arrayEnumerator then
-    for i = 1, #collection do
+    for i = 1, collection._length do
       local v = collection[i]
       if v == null then v = nil end
       addOrder(t, v, comparer)
@@ -459,19 +466,19 @@ local function addOrderRange(t, collection)
       addOrder(t, v, comparer)
     end
   end
-  if #t ~= n then
+  if t._length ~= n then
     versions[t] = (versions[t] or 0) + 1
   end
 end
 
 local function exceptWithOrder(t, other)
   if other == nil then throw(ArgumentNullException("other")) end
-  if #t == 0 then return end
+  if t._length == 0 then return end
   if t == other then
     clear(t)
     return
   end
-  local comparer, n = t.comparer, #t
+  local comparer, n = t.comparer, t._length
   if other.GetEnumerator == arrayEnumerator then
     for i = 1, n do
       local v = t[i]
@@ -479,6 +486,7 @@ local function exceptWithOrder(t, other)
       local i = binarySearch(t, v, comparer)
       if i >= 0 then
         tremove(t, i + 1)
+        t._length = t._length - 1
       end
     end
   else
@@ -486,24 +494,25 @@ local function exceptWithOrder(t, other)
       local i = binarySearch(t, v, comparer)
       if i >= 0 then
         tremove(t, i + 1)
+        t._length = t._length - 1
       end
     end
   end
-  if #t ~= n then
+  if t._length ~= n then
     versions[t] = (versions[t] or 0) + 1
   end
 end
 
 local function intersectWithOrder(t, other)
   if other == nil then throw(ArgumentNullException("other")) end
-  if #t == 0 then return end
+  if t._length == 0 then return end
   if t == other then return end
   local comparer = t.comparer
   local array = arrayFromTable({}, t.__genericT__)
   for _, v in each(other) do
     local i = binarySearch(t, v, comparer)
     if i >= 0 then
-      array[#array + 1] = v == nil and null or v
+      array[array._length + 1] = v == nil and null or v
     end
   end
   clear(t)
@@ -552,10 +561,10 @@ end
 local function isProperSubsetOfOrder(t, other)
   if other == nil then throw(ArgumentNullException("other")) end
   if t == other then return false end
-  local comparer, n = t.comparer, #t
+  local comparer, n = t.comparer, t._length
   if System.is(other, System.SortedSet(t.__genericT__)) then
     if comparer == other.comparer then
-      if n >= #other then return false end
+      if n >= other._length then return false end
       return isSubsetOfOrderWithSameEC(t, n, comparer, set)
     end
   end
@@ -565,7 +574,7 @@ end
 
 local function isProperSupersetOfOrder(t, other)
   if other == nil then throw(ArgumentNullException("other")) end
-  local n = #t
+  local n = t._length
   if n == 0 then return false end
   if System.is(other, System.ICollection) then
     if other:getCount() == 0 then
@@ -575,7 +584,7 @@ local function isProperSupersetOfOrder(t, other)
   local comparer = t.comparer
   if System.is(other, System.SortedSet(t.__genericT__)) then
     if comparer == other.comparer then
-      local n1 = #other
+      local n1 = other._length
       if n1 >= n then return false end
       return isSubsetOfOrderWithSameEC(other, n1, comparer, t)
     end
@@ -586,12 +595,12 @@ end
 
 local function isSubsetOfOrder(t, other)
   if other == nil then throw(ArgumentNullException("other")) end
-  local n = #t
+  local n = t._length
   if n == 0 then return true end
   local comparer = t.comparer
   if System.is(other, System.SortedSet(t.__genericT__)) then
     if comparer == other.comparer then
-      if n > #other then return false end
+      if n > other._length then return false end
       return isSubsetOfOrderWithSameEC(t, n, comparer, set)
     end
   end
@@ -606,10 +615,10 @@ local function isSupersetOfOrder(t, other)
       return true
     end
   end
-  local comparer, n = t.comparer, #t
+  local comparer, n = t.comparer, t._length
   if System.is(other, System.SortedSet(t.__genericT__)) then
     if comparer == other.comparer then
-      local n1 = #other
+      local n1 = other._length
       if n < n1 then return false end
       return isSubsetOfOrderWithSameEC(other, n1, comparer, t)
     end
@@ -625,7 +634,7 @@ end
 
 local function isOverlapsOrder(t, other)
   if other == nil then throw(ArgumentNullException("other")) end
-  local n = #t
+  local n = t._length
   if n == 0 then return false end
   if System.is(other, System.ICollection) and other:getCount() == 0 then return false end
   local comparer = t.comparer
@@ -646,9 +655,9 @@ end
 
 local function equalsOrder(t, other)
   if other == nil then throw(ArgumentNullException("other")) end
-  local comparer, n = t.comparer, #t
+  local comparer, n = t.comparer, t._length
   if System.is(other, System.SortedSet(t.__genericT__)) and comparer == other.comparer then
-    local n1 = #other
+    local n1 = other._length
     if n ~= n1 then return false end
     local c = comparer.Compare
     for i = 1, n do
@@ -667,7 +676,7 @@ end
 
 local function symmetricExceptWithOrder(t, other)
   if other == nil then throw(ArgumentNullException("other")) end
-  local n = #t
+  local n = t._length
   if n == 0 then
     addOrderRange(other)
     return
@@ -754,7 +763,7 @@ local function getViewBetweenOrder(t, lowerValue, upperValue)
   if comparer:Compare(lowerValue, upperValue) > 0 then
     throw(ArgumentException("lowerBound is greater than upperBound"))
   end
-  local n = #t
+  local n = t._length
   local i = binarySearch(t, lowerValue, comparer)
   if i < 0 then i = bnot(i) end
   local set = { comparer = comparer }
@@ -799,24 +808,26 @@ local function heapUp(t, k, n, c)
 end
 
 local function heapify(t, c)
-  local n = #t
+  local n = t._length
   for i = div(n, 2), 1, -1 do
     heapDown(t, i, n, c)  
   end
 end
 
 local function heapAdd(t, v, c)
-  local n = #t + 1
+  local n = t._length + 1
   t[n] = v
+  t._length = n
   heapUp(t, n, n, c)
 end
 
 local function heapPop(t, c)
-  local n = #t
+  local n = t._length
   if n == 0 then return end
   local v = t[1]
   t[1] = t[n]
   t[n] = nil
+  t._length = n - 1
   heapDown(t, 1, n - 1, c)
   return v
 end
@@ -836,7 +847,7 @@ local SortedSetEqualityComparer = {
   GetHashCodeOf = function (this, set)
     local hashCode = 0
     if set ~= nil then
-      for i = 1, #set do
+      for i = 1, set._length do
         local v = set[i]
         if v == null then v = nil end
         hashCode = System.xor(hashCode, System.band(this.equalityComparer:GetHashCodeOf(v), 0x7FFFFFFF))
@@ -880,6 +891,7 @@ end, {
     end
     local index = this.index
     local v = t[index]
+    print("en " .. index)
     if v ~= nil then
       if v == null then
         this.current = nil
@@ -903,7 +915,7 @@ local ArrayReverseEnumerable
 
 local function reverseEnumerator(t)
   local T = t.__genericT__
-  return setmetatable({ list = t, index = #t, version = versions[t], currnet = T:default() }, ArrayReverseEnumerable(T))
+  return setmetatable({ list = t, index = t._length, version = versions[t], currnet = T:default() }, ArrayReverseEnumerable(T))
 end
 
 ArrayReverseEnumerable = define("System.ArrayReverseEnumerable", function (T)
@@ -917,7 +929,7 @@ end, {
     return reverseEnumerator(this.list)
   end,
   Reset = function (this)
-    this.index = #this.list
+    this.index = this.list._length
     this.current = nil
   end,
   MoveNext = function (this)
@@ -949,7 +961,7 @@ local function checkArrayIndex(index1, index2)
   if index2 then
     throw(ArgumentException("Indices length does not match the array rank."))
   elseif type(index1) == "table" then
-    if #index1 ~= 1 then
+    if index1._length ~= 1 then
       throw(ArgumentException("Indices length does not match the array rank."))
     else
       index1 = index1[1]
@@ -964,9 +976,11 @@ Array = {
   set = set,
   get = get,
   setCapacity = function (t, len)
-    if len < #t then throw(ArgumentOutOfRangeException("Value", er.ArgumentOutOfRange_SmallCapacity())) end
+    if len < t._length then throw(ArgumentOutOfRangeException("Value", er.ArgumentOutOfRange_SmallCapacity())) end
   end,
   ctorList = function (t, ...)
+    t._length = 0
+    print("ctor list")
     local n = select("#", ...)
     if n == 0 then return end
     local collection = ...
@@ -974,6 +988,7 @@ Array = {
     addRange(t, collection)
   end,
   ctorOrderSet = function(t, ...)
+    t._length = 0
     local n = select("#", ...)
     if n == 0 then
       t.comparer = Comparer_1(t.__genericT__).getDefault()
@@ -987,6 +1002,7 @@ Array = {
     end
   end,
   ctorOrderDict = function (t, ...)
+    t._length = 0
     local n = select("#", ...)
     local dictionary, comparer
     if n ~= 0 then
@@ -1074,20 +1090,22 @@ Array = {
     end
   end,
   insert = function (t, index, v)
-    if index < 0 or index > #t then
+    local n = t._length
+    if index < 0 or index > n then
       throw(ArgumentOutOfRangeException("index"))
     end
     tinsert(t, index + 1, v == nil and null or v)
+    t._length = n + 1
     versions[t] = (versions[t] or 0) + 1
   end,
   insertRange = function (t, index, collection) 
     if collection == nil then throw(ArgumentNullException("collection")) end
-    local len = #t
+    local len = t._length
     if index < 0 or index > len then
       throw(ArgumentOutOfRangeException("index"))
     end
     if t.GetEnumerator == arrayEnumerator then
-      local count = #collection
+      local count = collection._length
       if count > 0 then
         if index < len then
           tmove(t, index + 1, len, index + 1 + count, t)
@@ -1099,12 +1117,15 @@ Array = {
           tmove(collection, 1, count, index + 1, t)
         end
       end
+      len = len + count + 1
     else
       for _, v in each(collection) do
         index = index + 1
         tinsert(t, index, v == nil and null or v)
+        len = len + 1
       end
     end
+    t._length = len - 1
     versions[t] = (versions[t] or 0) + 1
   end,
   getViewBetweenOrder = getViewBetweenOrder,
@@ -1124,7 +1145,7 @@ Array = {
   heapPop = heapPop,
   last = last,
   lastOrDefault = function (t)
-    local n = #t
+    local n = t._length
     local v = t[n]
     if v == nil then
       return t.__genericT__:default()
@@ -1135,9 +1156,11 @@ Array = {
     end
   end,
   popFirst = function (t)
-    if #t == 0 then throw(InvalidOperationException()) end
+    local n = t._length
+    if n == 0 then throw(InvalidOperationException()) end
     local v = t[1]
     tremove(t, 1)
+    t._length = n - 1
     versions[t] = (versions[t] or 0) + 1
     if v ~= null then
       return v
@@ -1145,10 +1168,12 @@ Array = {
     return nil
   end,
   popLast = function (t)
-    local n = #t
+    local n = t._length
     if n == 0 then throw(InvalidOperationException()) end
     local v = t[n]
     t[n] = nil
+    t._length = n - 1
+    versions[t] = (versions[t] or 0) + 1
     if v ~= null then
       return v
     end
@@ -1159,6 +1184,7 @@ Array = {
     local index = indexOf(t, v)
     if index >= 0 then
       tremove(t, index + 1)
+      t._length = t._length - 1
       versions[t] = (versions[t] or 0) + 1
       return true
     end
@@ -1166,7 +1192,7 @@ Array = {
   end,
   removeAll = function (t, match)
     if match == nil then throw(ArgumentNullException("match")) end
-    local size = #t
+    local size = t._length
     local freeIndex = 1
     while freeIndex <= size do
       local item = t[freeIndex]
@@ -1202,12 +1228,14 @@ Array = {
     index = index + 1
     if t[index] == nil then throw(ArgumentOutOfRangeException("index"))  end
     tremove(t, index)
+    t._length = t._length - 1
     versions[t] = (versions[t] or 0) + 1
   end,
   removeOrder = function (t, v)
     local i = binarySearch(t, v, t.comparer)
     if i >= 0 then
       tremove(t, i + 1)
+      t._length = t._length - 1
       versions[t] = (versions[t] or 0) + 1
       return true
     end
@@ -1217,6 +1245,7 @@ Array = {
     local i = getOrderDictIndex(t, k)
     if i >= 0 then
       tremove(t, i + 1)
+      t._length = t._length - 1
       versions[t] = (versions[t] or 0) + 1
       return true
     end
@@ -1226,9 +1255,11 @@ Array = {
     local i = getOrderDictIndex(t, p[1])
     if i >= 0 then
       local v = t[i + 1][2]
-      local comparer = EqualityComparer(this.__genericTValue__).getDefault()
+      local comparer = EqualityComparer(t.__genericTValue__).getDefault()
       if comparer:EqualsOf(p[2], v) then
-        tremove(this, i)
+        tremove(t, i)
+        t._length = t._length - 1
+        versions[t] = (versions[t] or 0) + 1
         return true
       end
     end
@@ -1244,7 +1275,7 @@ Array = {
     return false, t.__genericTValue__:default()
   end,
   getRange = function (t, index, count)
-    if count < 0 or index > #t - count then
+    if count < 0 or index > t._length - count then
       throw(ArgumentOutOfRangeException("index or count"))
     end
     local list = {}
@@ -1266,7 +1297,7 @@ Array = {
     return i
   end, 
   indexOfValue = function (t, v)
-    local len = #t
+    local len = t._length
     if len > 0 then
       local comparer = EqualityComparer(t.__genericTValue__).getDefault()
       local equals = comparer.EqualsOf
@@ -1296,7 +1327,7 @@ Array = {
   BinarySearch = binarySearch,
   ClearArray = function (t, index, length)
     if t == nil then throw(ArgumentNullException("array")) end
-    if index < 0 or length < 0 or index + length > #t then
+    if index < 0 or length < 0 or index + length > t._length then
       throw(IndexOutOfRangeException())
     end
     local default = t.__genericT__:default()
@@ -1331,7 +1362,7 @@ Array = {
   end,
   Fill = function (t, value, startIndex, count)
     if t == nil then throw(ArgumentNullException("array")) end
-    local len = #t
+    local len = t._length
     if not startIndex then
       startIndex, count = 0, len
     else
@@ -1347,7 +1378,7 @@ Array = {
   Find = function (t, match)
     if t == nil then throw(ArgumentNullException("array")) end
     if match == nil then throw(ArgumentNullException("match")) end
-    for i = 1, #t do
+    for i = 1, t._length do
       local item = t[i]
       if item == null then item = nil end
       if match(item) then
@@ -1363,7 +1394,7 @@ Array = {
   FindLast = function (t, match)
     if t == nil then throw(ArgumentNullException("array")) end
     if match == nil then throw(ArgumentNullException("match")) end
-    for i = #t, 1, -1 do
+    for i = t._length, 1, -1 do
       local item = t[i]
       if item == null then item = nil end
       if match(item) then
@@ -1374,7 +1405,7 @@ Array = {
   end,
   FindLastIndex = function (t, startIndex, count, match)
     if t == nil then throw(ArgumentNullException("array")) end
-    local len = #t
+    local len = t._length
     if not count then
       startIndex, count, match = len - 1, len, startIndex
     elseif not match then
@@ -1398,7 +1429,7 @@ Array = {
   end,
   ForEach = function (t, action)
     if action == nil then throw(ArgumentNullException("action")) end
-    for i = 1, #t do
+    for i = 1, t._length do
       local item = t[i]
       if item == null then item = nil end
       action(item)
@@ -1407,7 +1438,7 @@ Array = {
   IndexOf = indexOf,
   LastIndexOf = function (t, value, startIndex, count)
     if t == nil then throw(ArgumentNullException("array")) end
-    local len = #t
+    local len = t._length
     if not startIndex then
       startIndex, count = len - 1, len
     elseif not count then
@@ -1444,7 +1475,7 @@ Array = {
     if t == nil then
       return Array(T)(newSize)
     end
-    local len = #t
+    local len = t._length
     if len > newSize then
       fill(t, newSize + 1, len, nil)
     elseif len < newSize then
@@ -1452,14 +1483,15 @@ Array = {
       if default == nil then default = null end
       fill(t, len + 1, newSize, default)
     end
+    t._length = newSize
     return t
   end,
   Reverse = function (t, index, count)
     if not index then
       index = 0
-      count = #t
+      count = t._length
     else
-      if count < 0 or index > #t - count then
+      if count < 0 or index > t._length - count then
         throw(ArgumentOutOfRangeException("index or count"))
       end
     end
@@ -1483,7 +1515,7 @@ Array = {
       local index, count, comparer = ...
       if count > 1 then
         local comp = getSortComp(t, comparer)
-        if index == 0 and count == #t then
+        if index == 0 and count == t._length then
           tsort(t, comp)
         else
           checkIndexAndCount(t, index, count)
@@ -1499,7 +1531,7 @@ Array = {
   toArray = function (t)
     local array = {}    
     if t.GetEnumerator == arrayEnumerator then
-      tmove(t, 1, #t, 1, array)
+      tmove(t, 1, t._length, 1, array)
     else
       local count = 1
       for _, v in each(t) do
@@ -1512,7 +1544,7 @@ Array = {
   TrueForAll = function (t, match)
     if t == nil then throw(ArgumentNullException("array")) end
     if match == nil then throw(ArgumentNullException("match")) end
-    for i = 1, #t do
+    for i = 1, t._length do
       local item = t[i]
       if item == null then item = nil end
       if not match(item) then
@@ -1521,19 +1553,14 @@ Array = {
     end
     return true
   end,
-  Clone = function (this)
-    local t = setmetatable({}, getmetatable(this))
-    tmove(this, 1, #this, 1, t)
-    return t
-  end,
   CopyTo = function (t, ...)
     local n = select("#", ...)
     local sourceIndex, array, arrayIndex, len
     if n == 1 then
-      sourceIndex, arrayIndex, len, array = 0, 0, #t, ...
+      sourceIndex, arrayIndex, len, array = 0, 0, t._length, ...
       checkIndexAndCount(array, 0, len)
     elseif n == 2 then
-      sourceIndex, len, array, arrayIndex = 0, #t, ...
+      sourceIndex, len, array, arrayIndex = 0, t._length, ...
       checkIndexAndCount(array, arrayIndex, len)
     elseif n == 3 then
       sourceIndex, array, arrayIndex, len = 0, ...
@@ -1561,7 +1588,7 @@ Array = {
   GetEnumerator = arrayEnumerator,
   GetLength = function (this, dimension)
     if dimension ~= 0 then throw(IndexOutOfRangeException()) end
-    return #this
+    return this._length
   end,
   GetLowerBound = function (this, dimension)
     if dimension ~= 0 then throw(IndexOutOfRangeException()) end
@@ -1569,7 +1596,7 @@ Array = {
   end,
   GetUpperBound = function (this, dimension)
     if dimension ~= 0 then throw(IndexOutOfRangeException()) end
-    return #this - 1
+    return this._length - 1
   end,
   GetValue = function (this, index1, index2)
     if index1 == nil then throw(ArgumentNullException("indices")) end
@@ -1581,7 +1608,8 @@ Array = {
   end,
   Clone = function (this)
     local array = {}
-    tmove(this, 1, #this, 1, array)
+    tmove(this, 1, this._length, 1, array)
+    array._length = this._length
     return arrayFromTable(array, this.__genericT__)
   end
 }
